@@ -1,0 +1,243 @@
+import csv
+import os
+import math
+import tempfile
+import heapq
+from typing import Union, List
+
+class HeapElement:
+    __slots__ = ('key', 'row', 'file_index', 'ascending')
+    def __init__(self, key, row, file_index, ascending: bool):
+        self.key = key
+        self.row = row
+        self.file_index = file_index
+        self.ascending = ascending
+    def __lt__(self, other):
+        return self.key < other.key if self.ascending else self.key > other.key
+
+def estimate_row_size(file_path: str) -> int:
+    with open(file_path, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        try:
+            sample = [next(reader) for _ in range(100)]
+            total_chars = sum(len(','.join(row)) for row in sample)
+            return max(total_chars // len(sample), 1)
+        except StopIteration:
+            return 100
+
+def merge_sort_internal(arr: List[List[str]], key_index: int, ascending: bool) -> List[List[str]]:
+    """Implementação didática do Merge-Sort interno."""
+    if len(arr) <= 1:
+        return arr
+    
+    mid = len(arr) // 2
+    left = merge_sort_internal(arr[:mid], key_index, ascending)
+    right = merge_sort_internal(arr[mid:], key_index, ascending)
+
+    return merge(left, right, key_index, ascending)
+
+def merge(left: List[List[str]], right: List[List[str]], key_index: int, ascending: bool) -> List[List[str]]:
+    result = []
+    i = j = 0
+
+    def key_value(row):
+        return try_cast(row[key_index])
+
+    while i < len(left) and j < len(right):
+        if ascending:
+            if key_value(left[i]) <= key_value(right[j]):
+                result.append(left[i])
+                i += 1
+            else:
+                result.append(right[j])
+                j += 1
+        else:
+            if key_value(left[i]) >= key_value(right[j]):
+                result.append(left[i])
+                i += 1
+            else:
+                result.append(right[j])
+                j += 1
+
+    result.extend(left[i:])
+    result.extend(right[j:])
+    return result
+
+def try_cast(value: str):
+    try:
+        return float(value)
+    except ValueError:
+        return value.lower()
+
+def write_sorted_chunk(
+    chunk: List[List[str]],
+    key_index: int,
+    ascending: bool,
+    temp_dir: str
+) -> str:
+    # Ordena o chunk usando merge_sort interno
+    sorted_chunk = merge_sort_internal(chunk, key_index, ascending)
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode='w', newline='', encoding='utf-8', dir=temp_dir)
+    writer = csv.writer(temp_file)
+    writer.writerows(sorted_chunk)
+    temp_file.close()
+    return temp_file.name
+
+def merge_chunks_multi_pass(
+    input_files: List[str],
+    output_file: str,
+    key_index: int,
+    ascending: bool,
+    header: List[str],
+    temp_dir: str,
+    merge_factor: int = 10
+) -> None:
+    """
+    Realiza merge multi-pass para escalabilidade, mesclando até merge_factor arquivos por passada.
+    """
+    current_files = input_files
+
+    while len(current_files) > 1:
+        next_round_files = []
+        for i in range(0, len(current_files), merge_factor):
+            group = current_files[i:i + merge_factor]
+            merged_file = tempfile.NamedTemporaryFile(delete=False, suffix=".csv", mode='w', newline='', encoding='utf-8', dir=temp_dir).name
+            merge_files_heap(group, merged_file, key_index, ascending)
+            next_round_files.append(merged_file)
+            # Remove arquivos antigos após merge
+            for f in group:
+                os.remove(f)
+        current_files = next_round_files
+
+    # Renomeia o arquivo final para o nome de saída desejado
+    os.rename(current_files[0], output_file)
+
+    # Escreve o cabeçalho no arquivo final (precisa reabrir e reescrever)
+    with open(output_file, 'r', newline='', encoding='utf-8') as f:
+        lines = f.readlines()
+    with open(output_file, 'w', newline='', encoding='utf-8') as f:
+        f.write(','.join(header) + '\n')
+        f.writelines(lines)
+
+def merge_files_heap(
+    input_files: List[str],
+    output_file: str,
+    key_index: int,
+    ascending: bool
+) -> None:
+    files = [open(fname, 'r', newline='', encoding='utf-8') for fname in input_files]
+    readers = [csv.reader(f) for f in files]
+    heap = []
+
+    for idx, reader in enumerate(readers):
+        row = next(reader, None)
+        if row:
+            heapq.heappush(heap, HeapElement(try_cast(row[key_index]), row, idx, ascending))
+
+    with open(output_file, 'w', newline='', encoding='utf-8') as out_f:
+        writer = csv.writer(out_f)
+        while heap:
+            element = heapq.heappop(heap)
+            writer.writerow(element.row)
+            next_row = next(readers[element.file_index], None)
+            if next_row:
+                heapq.heappush(heap, HeapElement(try_cast(next_row[key_index]), next_row, element.file_index, ascending))
+
+    for f in files:
+        f.close()
+
+def external_merge_sort_optimized(
+    file_path: str,
+    key_column: Union[str, int],
+    order: str = "asc",
+    buffer_size_mb: int = 100,
+    output_file: str = "sorted_output.csv",
+    temp_dir: str = None,
+    merge_factor: int = 10
+) -> str:
+    """
+    Ordenação externa baseada em Merge-Sort com merge multi-pass e merge-sort interno.
+
+    Args:
+        file_path: Caminho do arquivo CSV original.
+        key_column: Nome ou índice da coluna chave.
+        order: 'asc' ou 'desc'.
+        buffer_size_mb: Tamanho do buffer em MB para leitura dos chunks.
+        output_file: Caminho do arquivo final ordenado.
+        temp_dir: Diretório para arquivos temporários (cria um temporário se None).
+        merge_factor: Quantidade de arquivos mesclados por passada no merge multi-pass.
+    """
+    if order not in ["asc", "desc"]:
+        raise ValueError("A ordem deve ser 'asc' ou 'desc'.")
+
+    ascending = (order == "asc")
+    row_size = estimate_row_size(file_path)
+    rows_per_chunk = max((buffer_size_mb * 1024 * 1024) // row_size, 1)
+
+    # Cria diretório temporário se não informado
+    if temp_dir is None:
+        temp_dir = tempfile.mkdtemp(prefix="extsort_")
+    else:
+        os.makedirs(temp_dir, exist_ok=True)
+
+    temp_files = []
+    with open(file_path, 'r', encoding='utf-8', newline='') as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        key_index = header.index(key_column) if isinstance(key_column, str) else key_column
+
+        chunk = []
+        for row in reader:
+            chunk.append(row)
+            if len(chunk) >= rows_per_chunk:
+                temp_files.append(write_sorted_chunk(chunk, key_index, ascending, temp_dir))
+                chunk = []
+        if chunk:
+            temp_files.append(write_sorted_chunk(chunk, key_index, ascending, temp_dir))
+
+    # Merge multi-pass para escalabilidade
+    merge_chunks_multi_pass(temp_files, output_file, key_index, ascending, header, temp_dir, merge_factor)
+
+    # Remove diretório temporário se estiver vazio
+    try:
+        os.rmdir(temp_dir)
+    except OSError:
+        pass
+
+    return output_file
+
+if __name__ == "__main__":
+    import random
+
+    # Criar arquivo CSV de teste grande
+    test_file = "test_large.csv"
+    num_rows = 100000  # Ajuste conforme sua RAM e necessidade
+
+    if not os.path.exists(test_file):
+        print(f"Criando arquivo de teste '{test_file}' com {num_rows} linhas...")
+        with open(test_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['id', 'nome', 'idade', 'salario'])
+            for i in range(num_rows):
+                writer.writerow([
+                    random.randint(1, 1000000),
+                    f"Nome{i % 1000}",
+                    random.randint(18, 70),
+                    round(random.uniform(1000, 10000), 2)
+                ])
+        print("Arquivo criado.")
+
+    # Executar ordenação externa
+    print("Iniciando ordenação externa...")
+    sorted_file = external_merge_sort_optimized(
+        file_path=test_file,
+        key_column='id',
+        order='asc',
+        buffer_size_mb=10,  # Ajuste conforme memória disponível
+        output_file="sorted_test_large.csv",
+        merge_factor=20  # Ajuste para merge multi-pass
+    )
+    print(f"Ordenação concluída. Arquivo ordenado salvo em: {sorted_file}")
+
+    # Opcional: remover arquivo de teste após uso
+    # os.remove(test_file)
