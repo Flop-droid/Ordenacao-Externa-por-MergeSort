@@ -238,6 +238,5 @@ if __name__ == "__main__":
         merge_factor=20  # Ajuste para merge multi-pass
     )
     print(f"Ordenação concluída. Arquivo ordenado salvo em: {sorted_file}")
-
     # Opcional: remover arquivo de teste após uso
     # os.remove(test_file)
