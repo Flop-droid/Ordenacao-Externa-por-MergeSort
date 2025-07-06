@@ -1,2 +1,2 @@
 # Ordenacao-Externa-por-MergeSort
-Este projeto implementa uma ordenação externa para arquivos CSV maiores que a capacidade da memória RAM, utilizando o algoritmo Merge-Sort adaptado para memória secundária. 
+Repositório destinado para entrega do Projeto 7, intitulado "Tarefa de Programação 007 – Ordenação Externa por MergeSort", para a disciplina de Estrutura de Dados 25.1, ministrada pelo professor Milton Ramirez. Este projeto implementa uma ordenação externa para arquivos CSV maiores que a capacidade da memória RAM, utilizando o algoritmo Merge-Sort adaptado para memória secundária.
